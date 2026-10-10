@@ -29,6 +29,7 @@
 | `monitor.log` | 运行日志（超过 1MB 自动只留最后 1000 行） |
 | `monitor.lock` | 单实例锁文件 |
 | `TrafficMonitor.ps1` | `install` 时自动复制的脚本副本（计划任务执行的是它） |
+| `TrafficMonitor.cmd` | `install` 时一并复制的启动器，可在安装目录里直接双击看用量 |
 
 ---
 
@@ -47,7 +48,8 @@ powershell -ExecutionPolicy Bypass -File .\TrafficMonitor.ps1            # 等�
 powershell -ExecutionPolicy Bypass -File .\TrafficMonitor.ps1 -Action report -Days 30
 ```
 
-也可以直接双击 `TrafficMonitor.cmd` 看用量。
+也可以直接双击 `TrafficMonitor.cmd` 看用量。`install` 之后安装目录（`C:\ProgramData\TrafficMonitor\`）
+里也有一份 `TrafficMonitor.cmd`，把它发送到桌面快捷方式，以后双击就能看用量。
 
 ---
 
