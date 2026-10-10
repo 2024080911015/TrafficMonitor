@@ -108,8 +108,33 @@ powershell -ExecutionPolicy Bypass -File .\TrafficMonitor.ps1 -Action report -Da
 | `-StatePath` | `C:\ProgramData\TrafficMonitor\state.json` | 账本位置 |
 | `-Provider` | `auto` | 采集方式：`netadapter`（默认首选）/ `perfcounter` / `auto` |
 | `-InstallMode` | `auto` | `auto`＝管理员用开机启动，否则用登录时启动；也可强制 `startup` / `logon` |
+| `-WatchdogMinutes` | `5` | 自愈检查间隔（分钟）。进程被意外终止后最多这么久自动拉起；`0` 关闭自愈 |
 | `-Json` | 关 | `status` / `report` 以 JSON 输出，便于其他程序读取 |
 | `-Force` | 关 | `reset` / `uninstall` 跳过交互确认 |
+
+### 自愈：进程被杀掉也会自己回来
+
+`install` 会注册**两个**触发器：
+
+| 触发器 | 作用 |
+| --- | --- |
+| 登录时（或开机时） | 登录/开机后立刻开始计数 |
+| 每 5 分钟重复（无限期） | 配合 `MultipleInstances=IgnoreNew`：正在跑时新实例被**直接忽略**（不产生额外进程），一旦监测进程被意外终止，最多 5 分钟自动拉起 |
+
+同时把默认生成的 `StopOnIdleEnd=true` 关掉，避免任务在系统结束空闲状态时被调度器终止。
+即便真的断了一小段，**流量也不会丢** —— 网卡计数器一直在累加，重启后按差值一次性补计。
+
+```powershell
+.\TrafficMonitor.ps1 -Action install -WatchdogMinutes 2   # 改成 2 分钟自愈
+.\TrafficMonitor.ps1 -Action install -WatchdogMinutes 0   # 关闭自愈
+```
+
+想事后追查任务为什么停了，可以用**管理员**身份打开计划任务日志（默认关闭）：
+
+```powershell
+wevtutil sl Microsoft-Windows-TaskScheduler/Operational /e:true
+Get-WinEvent -LogName Microsoft-Windows-TaskScheduler/Operational -MaxEvents 30
+```
 
 ### 示例
 
@@ -187,6 +212,33 @@ powershell -ExecutionPolicy Bypass -File .\TrafficMonitor.ps1 -Action report -Da
 **Q：资源占用？**
 实测稳定态 **CPU ≈ 1.5% 单核**（每 5 秒一次 `Get-NetAdapterStatistics`，单次约 130ms）、
 内存约 80MB（PowerShell 进程本身的开销）。嫌高就把 `-IntervalSeconds` 调到 10~30。
+
+**Q：数字比实际宽带用量大得多，上传特别夸张？**
+
+**本工具统计的是"物理网卡上的全部字节"，包含局域网流量。** 下面这些都不走互联网，但会被算进去：
+
+| 场景 | 为什么算在上传里 |
+| --- | --- |
+| Sunshine / Moonlight 串流、DLNA 投屏 | 视频流是**纯上传**（服务端 → 客户端），1080p60 大约 15~35 Mbps |
+| 往 NAS / 另一台电脑复制文件（SMB） | 局域网内的大文件传输 |
+| 开热点（ICS）给手机用 | 手机的上下行都要经过本机网卡转发 |
+| 局域网游戏、远程桌面、VM 的 NAT 流量 | 都从物理网卡进出 |
+
+排查方法（以串流为例，查服务端日志最快）：
+
+```powershell
+# 谁在占带宽：按网卡看速率
+Get-Counter '\Network Interface(*)\Bytes Sent/sec' -SampleInterval 1 -MaxSamples 3
+
+# Sunshine 串流会话记录
+Select-String -Path 'C:\Program Files\Sunshine\config\sunshine.log' -Pattern 'streaming session|CLIENT CONNECTED|CLIENT DISCONNECTED'
+
+# 传送到外网的真实连接（排除局域网/假 IP）
+Get-NetTCPConnection | Where-Object { $_.RemoteAddress -notmatch '^(127\.|192\.168\.|10\.|198\.18\.)' }
+```
+
+若只想统计**外网**流量，需要按连接（WFP/ETW）而不是按网卡计数，目前版本没做这件事 ——
+网卡计数器只能给出总量，无法区分目的地。
 
 **Q：会不会装了两个实例重复计数？**
 不会。`monitor.lock` 以独占方式占用，第二个实例会直接退出（退出码 2）。
